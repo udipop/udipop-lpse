@@ -1,57 +1,72 @@
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
-import pandas as pd
-from concurrent.futures import ThreadPoolExecutor
+import re
 
-st.title("📋 Udipop Scraper Tender LPSE Indonesia")
+st.set_page_config(page_title="Scraper Tender LPSE", layout="wide")
+st.title("📦 Scraper Tender LPSE Nasional (HPS > Rp200jt)")
 
-# Fungsi untuk ambil tender dari satu domain
-def ambil_tender(domain):
-    url = f"{domain}/eproc4/"
+# Load daftar domain LPSE dari file
+def load_lpse_list(path='daftar_lpse.txt'):
+    with open(path, 'r') as f:
+        return [line.strip() for line in f if line.strip()]
+
+def extract_tender_data(domain):
+    url = f"https://{domain}/eproc4/"
     try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, "html.parser")
-        table = soup.find("table")
-        if not table:
-            return []
+        res = requests.get(url, timeout=10)
+        res.raise_for_status()
+        soup = BeautifulSoup(res.text, 'html.parser')
 
-        rows = table.find_all("tr")[1:]  # Skip header
-        hasil = []
+        rows = soup.select("table tr")[1:]  # skip header
+        data = []
         for row in rows:
-            cols = row.find_all("td")
-            if len(cols) >= 4:
-                hasil.append({
-                    "LPSE": domain.replace("https://", ""),
-                    "Kode Tender": cols[0].text.strip(),
-                    "Nama Paket": cols[1].text.strip(),
-                    "Satuan Kerja": cols[2].text.strip(),
-                    "Tahapan": cols[3].text.strip()
+            cols = row.find_all('td')
+            if len(cols) < 4:
+                continue
+            nama_paket = cols[1].text.strip()
+            hps_str = cols[2].text.strip().replace('Rp', '').replace('.', '').replace(',', '.')
+            try:
+                hps = float(hps_str)
+            except ValueError:
+                hps = 0
+            akhir_pendaftaran = cols[3].text.strip()
+            if hps > 200_000_000:
+                data.append({
+                    'LPSE': domain,
+                    'Nama Paket': nama_paket,
+                    'HPS': f"Rp {hps:,.0f}".replace(',', '.'),
+                    'Akhir Pendaftaran': akhir_pendaftaran
                 })
-        return hasil
+        return data
     except Exception as e:
-        return [{"LPSE": domain.replace("https://", ""), "Kode Tender": "-", "Nama Paket": f"Gagal ambil data: {e}", "Satuan Kerja": "-", "Tahapan": "-"}]
+        st.warning(f"Gagal mengambil data dari {domain}: {e}")
+        return []
 
-# Baca daftar domain
-with open("daftar_lpse.txt", "r") as f:
-    list_domain = [line.strip() for line in f.readlines() if line.strip()]
+# Load semua domain
+lpse_domains = load_lpse_list()
 
-st.write(f"📡 Mengambil tender aktif dari {len(list_domain)} domain LPSE...")
+# Tampilkan progress
+results = []
+progress = st.progress(0)
+status = st.empty()
 
-# Proses paralel agar cepat
-all_data = []
-with ThreadPoolExecutor(max_workers=10) as executor:
-    results = executor.map(ambil_tender, list_domain)
-    for result in results:
-        all_data.extend(result)
+for i, domain in enumerate(lpse_domains):
+    status.text(f"Mengambil data dari: {domain}")
+    tender_data = extract_tender_data(domain)
+    results.extend(tender_data)
+    progress.progress((i + 1) / len(lpse_domains))
 
-# Tampilkan data jika ada
-if all_data:
-    df = pd.DataFrame(all_data)
-    st.success(f"Ditemukan {len(df)} data tender aktif!")
-    st.dataframe(df)
-    csv = df.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Download CSV", csv, "tender_lpse.csv", "text/csv")
+progress.empty()
+status.empty()
+
+# Tampilkan hasil jika ada
+df = None
+if results:
+    import pandas as pd
+    df = pd.DataFrame(results)
+    df = df.sort_values(by='HPS', ascending=False)
+    st.success(f"Ditemukan {len(df)} paket tender dengan HPS di atas Rp200 juta.")
+    st.dataframe(df, use_container_width=True)
 else:
-    st.warning("Tidak ada data tender yang ditemukan.")
+    st.info("Tidak ada data tender yang ditemukan.")
