@@ -1,72 +1,73 @@
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
+import pandas as pd
+from concurrent.futures import ThreadPoolExecutor
 import re
 
-st.set_page_config(page_title="Scraper Tender LPSE", layout="wide")
-st.title("📦 Scraper Tender LPSE Nasional (HPS > Rp200jt)")
+st.title("📋 Udipop Scraper Tender LPSE Indonesia")
 
-# Load daftar domain LPSE dari file
-def load_lpse_list(path='daftar_lpse.txt'):
-    with open(path, 'r') as f:
-        return [line.strip() for line in f if line.strip()]
-
-def extract_tender_data(domain):
-    url = f"https://{domain}/eproc4/"
+# Fungsi bantu untuk konversi nilai HPS ke float
+def parse_hps(hps_text):
     try:
-        res = requests.get(url, timeout=10)
-        res.raise_for_status()
-        soup = BeautifulSoup(res.text, 'html.parser')
+        angka = re.sub(r'[^\d]', '', hps_text)
+        return float(angka)
+    except:
+        return 0.0
 
-        rows = soup.select("table tr")[1:]  # skip header
-        data = []
+# Fungsi untuk ambil tender dari satu domain
+def ambil_tender(domain):
+    url = f"{domain}/eproc4/"
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        table = soup.find("table")
+        if not table:
+            return []
+
+        rows = table.find_all("tr")[1:]  # Skip header
+        hasil = []
         for row in rows:
-            cols = row.find_all('td')
-            if len(cols) < 4:
-                continue
-            nama_paket = cols[1].text.strip()
-            hps_str = cols[2].text.strip().replace('Rp', '').replace('.', '').replace(',', '.')
-            try:
-                hps = float(hps_str)
-            except ValueError:
-                hps = 0
-            akhir_pendaftaran = cols[3].text.strip()
-            if hps > 200_000_000:
-                data.append({
-                    'LPSE': domain,
-                    'Nama Paket': nama_paket,
-                    'HPS': f"Rp {hps:,.0f}".replace(',', '.'),
-                    'Akhir Pendaftaran': akhir_pendaftaran
-                })
-        return data
+            cols = row.find_all("td")
+            if len(cols) >= 5:
+                hps_text = cols[3].text.strip()
+                hps_value = parse_hps(hps_text)
+                if hps_value >= 200_000_000:
+                    hasil.append({
+                        "LPSE": domain.replace("https://", ""),
+                        "Nama Paket": cols[1].text.strip(),
+                        "HPS": hps_text,
+                        "Akhir Pendaftaran": cols[4].text.strip()
+                    })
+        return hasil
     except Exception as e:
-        st.warning(f"Gagal mengambil data dari {domain}: {e}")
-        return []
+        return [{
+            "LPSE": domain.replace("https://", ""),
+            "Nama Paket": f"Gagal ambil data: {e}",
+            "HPS": "-",
+            "Akhir Pendaftaran": "-"
+        }]
 
-# Load semua domain
-lpse_domains = load_lpse_list()
+# Baca daftar domain
+with open("daftar_lpse.txt", "r") as f:
+    list_domain = [line.strip() for line in f.readlines() if line.strip()]
 
-# Tampilkan progress
-results = []
-progress = st.progress(0)
-status = st.empty()
+st.write(f"📡 Mengambil tender aktif dari {len(list_domain)} domain LPSE...")
 
-for i, domain in enumerate(lpse_domains):
-    status.text(f"Mengambil data dari: {domain}")
-    tender_data = extract_tender_data(domain)
-    results.extend(tender_data)
-    progress.progress((i + 1) / len(lpse_domains))
+# Proses paralel agar cepat
+all_data = []
+with ThreadPoolExecutor(max_workers=10) as executor:
+    results = executor.map(ambil_tender, list_domain)
+    for result in results:
+        all_data.extend(result)
 
-progress.empty()
-status.empty()
-
-# Tampilkan hasil jika ada
-df = None
-if results:
-    import pandas as pd
-    df = pd.DataFrame(results)
-    df = df.sort_values(by='HPS', ascending=False)
-    st.success(f"Ditemukan {len(df)} paket tender dengan HPS di atas Rp200 juta.")
-    st.dataframe(df, use_container_width=True)
+# Tampilkan data jika ada
+if all_data:
+    df = pd.DataFrame(all_data)
+    st.success(f"Ditemukan {len(df)} data tender aktif dengan HPS > 200 juta!")
+    st.dataframe(df)
+    csv = df.to_csv(index=False).encode('utf-8')
+    st.download_button("📥 Download CSV", csv, "tender_lpse.csv", "text/csv")
 else:
-    st.info("Tidak ada data tender yang ditemukan.")
+    st.warning("Tidak ada data tender yang ditemukan.")
