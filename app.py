@@ -17,7 +17,7 @@ def parse_hps(hps_text):
 
 # Fungsi untuk ambil tender dari satu domain
 def ambil_tender(domain):
-    url = f"{domain}/eproc4/"
+    url = f"{domain}/"
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
