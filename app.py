@@ -1,43 +1,64 @@
 import streamlit as st
+import pandas as pd
 import requests
 from bs4 import BeautifulSoup
-import pandas as pd
-import re
+from urllib.parse import urljoin
+from concurrent.futures import ThreadPoolExecutor
 
-def format_hps(hps):
-    return re.sub(r',00$', '', hps.strip())
+st.set_page_config(page_title="Scraper LPSE", layout="wide")
+st.title("🔍 Scraper Tender LPSE SPSE 4.5")
+
+# Baca daftar LPSE dari file
+def read_lpse_list(file_path):
+    with open(file_path, "r") as file:
+        return [line.strip() for line in file if line.strip()]
 
 def scrape_lpse(url):
+    base_url = url.rstrip("/")
+    target_url = urljoin(base_url, "/eproc4")
     try:
-        page = requests.get(f"{url}/eproc4/lelang")
-        soup = BeautifulSoup(page.text, 'html.parser')
-        table = soup.find('table', class_='table')
+        response = requests.get(target_url, timeout=10, verify=False)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
 
-        rows = table.find_all('tr')[1:]  # skip header
-        results = []
+        table = soup.find("table")
+        if not table:
+            return []
+
+        rows = table.find_all("tr")
+        data = []
+
         for row in rows:
-            cols = row.find_all('td')
-            if len(cols) < 5:
-                continue
-            nama_paket = cols[1].text.strip()
-            hps = format_hps(cols[3].text.strip())
-            akhir_pendaftaran = cols[4].text.strip()
-            link = url + cols[1].find('a')['href']
-            results.append([nama_paket, hps, akhir_pendaftaran, link])
-        return results
-    except Exception as e:
-        return [["Gagal scrap", str(e), "", url]]
+            cols = row.find_all("td")
+            if len(cols) == 4 and "href" in str(row):
+                nama_paket_tag = cols[1].find("a")
+                nama_paket = nama_paket_tag.text.strip() if nama_paket_tag else ""
+                link = urljoin(base_url, nama_paket_tag["href"]) if nama_paket_tag else ""
+                hps = cols[2].text.strip()
+                akhir = cols[3].text.strip()
+                data.append({
+                    "LPSE": base_url,
+                    "Nama Paket": nama_paket,
+                    "HPS": hps,
+                    "Akhir Pendaftaran": akhir,
+                    "Link": link,
+                })
+        return data
+    except Exception:
+        return []
 
-# Streamlit UI
-st.title("📦 Scraper LPSE dari daftar link")
+lpse_list = read_lpse_list("daftar_lpse.txt")
+st.write(f"Total LPSE ditemukan: {len(lpse_list)}")
 
-uploaded_file = st.file_uploader("Upload file daftar_lpse.txt", type='txt')
-if uploaded_file:
-    urls = uploaded_file.getvalue().decode("utf-8").splitlines()
-    all_data = []
-    for url in urls:
-        all_data += scrape_lpse(url.strip())
+all_data = []
+with ThreadPoolExecutor(max_workers=10) as executor:
+    results = executor.map(scrape_lpse, lpse_list)
+    for result in results:
+        if result:
+            all_data.extend(result)
 
-    df = pd.DataFrame(all_data, columns=["Nama Paket", "Nilai HPS", "Akhir Pendaftaran", "Link Sumber"])
+if all_data:
+    df = pd.DataFrame(all_data)
     st.dataframe(df)
-    st.success(f"Ditemukan {len(df)} tender.")
+else:
+    st.warning("Tidak ada data berhasil diambil dari LPSE yang tersedia.")
