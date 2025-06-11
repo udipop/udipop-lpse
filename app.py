@@ -41,7 +41,6 @@ def scrape_lpse(url):
                     "Nama Paket": nama_paket,
                     "HPS": hps,
                     "Akhir Pendaftaran": akhir,
-                    "Link": link,
                 })
         return data
     except Exception:
