@@ -8,7 +8,7 @@ st.title("📋 Tender Aktif dari Seluruh LPSE SPSE v4.x")
 
 # Fungsi untuk ambil tender dari satu domain
 def ambil_tender(domain):
-    url = f"{domain}/eproc4/lelang"
+    url = f"{domain}/eproc4/"
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
