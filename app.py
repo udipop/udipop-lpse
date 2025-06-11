@@ -2,54 +2,78 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
+import re
 
-st.title("📋 Udipop Scraper Tender LPSE Indonesia")
+st.set_page_config(layout="wide")
+st.title("📦 Tender LPSE Scraper")
 
-def get_tender_data(lpse_url):
+HPS_MINIMUM = 200_000_000
+
+@st.cache_data(show_spinner=False)
+def get_lpse_links():
     try:
-        response = requests.get(f"{lpse_url}/eproc4", timeout=10)
-        soup = BeautifulSoup(response.text, 'html.parser')
-
-        rows = soup.select("div.card.card-primary table tbody tr")
-        data = []
-
-        for row in rows:
-            cols = row.find_all('td')
-            if len(cols) < 4:
-                continue
-            link_tag = cols[1].find('a')
-            nama_paket = link_tag.text.strip() if link_tag else cols[1].text.strip()
-            link = lpse_url + link_tag.get("href") if link_tag else lpse_url
-            hps = cols[2].text.strip()
-            akhir_pendaftaran = cols[3].text.strip()
-            data.append({
-                "Nama Paket": nama_paket,
-                "HPS": hps,
-                "Akhir Pendaftaran": akhir_pendaftaran,
-                "Sumber": link
-            })
-        return data
-    except Exception as e:
+        with open("daftar_lpse.txt", "r") as file:
+            return [line.strip().rstrip("/") for line in file if line.strip()]
+    except FileNotFoundError:
         return []
 
-def main():
-    st.title("Scraper Tender LPSE Seluruh Indonesia")
+@st.cache_data(show_spinner="🔍 Mengambil data dari LPSE...")
+def scrap_lpse(url):
+    base_url = url + "/eproc4"
+    try:
+        res = requests.get(base_url, timeout=10)
+        soup = BeautifulSoup(res.text, "lxml")
+        table = soup.find("table")
+        if not table:
+            return []
 
-    with open("daftar_lpse.txt", "r") as f:
-        lpse_links = [line.strip() for line in f.readlines() if line.strip()]
+        rows = table.select("tbody > tr")
+        kategori = ""
+        results = []
 
-    selected_lpse = st.selectbox("Pilih LPSE", lpse_links)
-    st.write(f"Menampilkan data dari: {selected_lpse}")
+        for row in rows:
+            if row.find("a") and "toggle();" in row.find("a").get("onclick", ""):
+                kategori = row.get_text(strip=True)
+                continue
 
-    with st.spinner("Mengambil data..."):
-        result = get_tender_data(selected_lpse)
+            cols = row.find_all("td")
+            if len(cols) == 4:
+                nama_paket_tag = cols[1].find("a")
+                nama_paket = nama_paket_tag.text.strip()
+                link = base_url + nama_paket_tag.get("href") if nama_paket_tag else ""
+                hps_str = cols[2].text.strip()
+                akhir = cols[3].text.strip()
 
-    if result:
-        df = pd.DataFrame(result)
-        df["Sumber"] = df["Sumber"].apply(lambda x: f"[Lihat]({x})")
-        st.write(df.to_markdown(index=False), unsafe_allow_html=True)
+                hps = int(re.sub(r"[^0-9]", "", hps_str))
+
+                if hps >= HPS_MINIMUM:
+                    results.append({
+                        "LPSE": url,
+                        "Kategori": kategori,
+                        "Nama Paket": nama_paket,
+                        "HPS": hps,
+                        "Akhir Pendaftaran": akhir,
+                        "Link": link
+                    })
+        return results
+    except Exception as e:
+        st.warning(f"⚠️ Gagal mengakses {url}: {e}")
+        return []
+
+lpse_links = get_lpse_links()
+
+if not lpse_links:
+    st.error("❌ File 'daftar_lpse.txt' tidak ditemukan atau kosong.")
+else:
+    all_data = []
+    for link in lpse_links:
+        data = scrap_lpse(link)
+        all_data.extend(data)
+
+    if not all_data:
+        st.info("🔍 Tidak ditemukan tender dengan HPS ≥ 200 juta.")
     else:
-        st.warning("Tidak ada data ditemukan atau terjadi kesalahan.")
-
-if __name__ == "__main__":
-    main()
+        df = pd.DataFrame(all_data)
+        df = df.sort_values(by="HPS", ascending=False).reset_index(drop=True)
+        df["HPS"] = df["HPS"].apply(lambda x: f"Rp {x:,.0f}".replace(",", "."))
+        st.dataframe(df, use_container_width=True)
