@@ -1,13 +1,15 @@
+import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 import re
 
-# Fungsi bantu untuk membersihkan nilai HPS
+# Fungsi bersihkan HPS
 def clean_hps(hps_raw):
-    return re.sub(r'\.00$', '', hps_raw.replace(',00', ''))
+    hps_raw = re.sub(r',00|\.00$', '', hps_raw)
+    return hps_raw
 
-# Fungsi scrap 1 halaman LPSE
+# Fungsi scraping satu halaman
 def scrape_lpse(url):
     paket_list = []
 
@@ -15,49 +17,57 @@ def scrape_lpse(url):
         response = requests.get(url, timeout=10)
         response.raise_for_status()
     except Exception as e:
-        print(f"Gagal akses {url}: {e}")
+        st.warning(f"Gagal akses {url}: {e}")
         return paket_list
 
     soup = BeautifulSoup(response.text, 'html.parser')
 
-    # Cari semua div atau tr yang berisi paket
-    rows = soup.find_all("div", class_="daftar-paket") or soup.find_all("tr")
-
-    for row in rows:
+    # Cari elemen paket
+    paket_divs = soup.find_all('div', class_='col-md-9') or []
+    for div in paket_divs:
         try:
-            nama_paket = row.find("a").get_text(strip=True)
+            nama = div.find('a').get_text(strip=True)
 
-            hps_tag = row.find(string=re.compile("HPS")).parent
-            hps_raw = hps_tag.get_text(strip=True)
-            hps_clean = clean_hps(re.search(r"Rp\s?[\d\.,]+", hps_raw).group())
+            hps_text = div.find(string=re.compile('HPS'))
+            hps_value = clean_hps(re.search(r'Rp\s[\d\.,]+', hps_text).group())
 
-            akhir_tag = row.find(string=re.compile("Akhir Pendaftaran"))
-            akhir_pendaftaran = akhir_tag.find_next().get_text(strip=True)
+            akhir = div.find(string=re.compile('Akhir Pendaftaran'))
+            akhir_value = akhir.find_next().get_text(strip=True)
 
             paket_list.append({
-                "Nama Paket": nama_paket,
-                "HPS": hps_clean,
-                "Akhir Pendaftaran": akhir_pendaftaran
+                "Nama Paket": nama,
+                "HPS": hps_value,
+                "Akhir Pendaftaran": akhir_value,
+                "Sumber": url
             })
         except Exception:
             continue
 
     return paket_list
 
-# Baca semua link dari file
-with open("daftar_lpse.txt", "r") as file:
-    urls = [line.strip() for line in file if line.strip()]
+# === STREAMLIT UI ===
+st.set_page_config(page_title="Scraper LPSE", layout="wide")
+st.title("🛠️ Scraper LPSE dari daftar link")
 
-# Gabungkan semua data
-all_data = []
-for url in urls:
-    print(f"Scraping: {url}")
-    data = scrape_lpse(url)
-    all_data.extend(data)
+uploaded_file = st.file_uploader("Upload file daftar_lpse.txt", type=['txt'])
 
-# Tampilkan hasil dalam DataFrame
-df = pd.DataFrame(all_data)
-print(df)
+if uploaded_file:
+    urls = uploaded_file.read().decode('utf-8').splitlines()
+    urls = [u.strip() for u in urls if u.strip()]
+    
+    all_data = []
 
-# Simpan sebagai CSV jika diinginkan
-df.to_csv("hasil_scrape_lpse.csv", index=False)
+    progress = st.progress(0)
+    for i, url in enumerate(urls):
+        st.write(f"🔗 Memproses: {url}")
+        data = scrape_lpse(url)
+        all_data.extend(data)
+        progress.progress((i+1)/len(urls))
+
+    if all_data:
+        df = pd.DataFrame(all_data)
+        st.success(f"✅ Ditemukan {len(df)} paket dari {len(urls)} link")
+        st.dataframe(df)
+        st.download_button("📥 Download CSV", df.to_csv(index=False), file_name="hasil_lpse.csv")
+    else:
+        st.error("❌ Tidak ada data yang berhasil diambil.")
