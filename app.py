@@ -3,77 +3,86 @@ import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 import re
+from urllib.parse import urljoin
 
-st.set_page_config(layout="wide")
+st.set_page_config(page_title="LPSE Tender Scraper", layout="wide")
 st.title("📦 Tender LPSE Scraper")
 
-HPS_MINIMUM = 200_000_000
+MIN_HPS = 200_000_000
 
 @st.cache_data(show_spinner=False)
-def get_lpse_links():
-    try:
-        with open("daftar_lpse.txt", "r") as file:
-            return [line.strip().rstrip("/") for line in file if line.strip()]
-    except FileNotFoundError:
-        return []
+def load_lpse_list(file_path="daftar_lpse.txt"):
+    with open(file_path, "r") as f:
+        return [line.strip().rstrip('/') for line in f if line.strip()]
 
-@st.cache_data(show_spinner="🔍 Mengambil data dari LPSE...")
+def parse_rupiah_to_int(rupiah_str):
+    try:
+        cleaned = re.sub(r'[^0-9]', '', rupiah_str)
+        return int(cleaned)
+    except:
+        return 0
+
 def scrap_lpse(url):
-    base_url = url + "/eproc4"
     try:
-        res = requests.get(base_url, timeout=10)
-        soup = BeautifulSoup(res.text, "lxml")
-        table = soup.find("table")
-        if not table:
-            return []
+        full_url = urljoin(url, "/eproc4")
+        res = requests.get(full_url, timeout=10)
+        res.raise_for_status()
+    except Exception as e:
+        return []  # Skip errors silently now
 
-        rows = table.select("tbody > tr")
-        kategori = ""
-        results = []
+    soup = BeautifulSoup(res.text, "html.parser")
+    rows = soup.select("table.table.table-sm tbody tr")
 
-        for row in rows:
-            if row.find("a") and "toggle();" in row.find("a").get("onclick", ""):
-                kategori = row.get_text(strip=True)
-                continue
+    current_category = ""
+    tender_data = []
 
-            cols = row.find_all("td")
-            if len(cols) == 4:
-                nama_paket_tag = cols[1].find("a")
-                nama_paket = nama_paket_tag.text.strip()
-                link = base_url + nama_paket_tag.get("href") if nama_paket_tag else ""
-                hps_str = cols[2].text.strip()
-                akhir = cols[3].text.strip()
+    for row in rows:
+        if row.find("td", colspan=True):
+            current_category = row.get_text(strip=True)
+            continue
 
-                hps = int(re.sub(r"[^0-9]", "", hps_str))
+        cols = row.find_all("td")
+        if len(cols) != 4:
+            continue
 
-                if hps >= HPS_MINIMUM:
-                    results.append({
+        try:
+            nama = cols[1].get_text(strip=True)
+            hps = cols[2].get_text(strip=True)
+            akhir = cols[3].get_text(strip=True)
+            hps_int = parse_rupiah_to_int(hps)
+            if hps_int >= MIN_HPS:
+                link_tag = cols[1].find("a")
+                if link_tag and link_tag.has_attr("href"):
+                    link = urljoin(full_url, link_tag["href"])
+                    tender_data.append({
                         "LPSE": url,
-                        "Kategori": kategori,
-                        "Nama Paket": nama_paket,
+                        "Kategori": current_category,
+                        "Nama Paket": nama,
                         "HPS": hps,
                         "Akhir Pendaftaran": akhir,
                         "Link": link
                     })
-        return results
-    except Exception as e:
-        st.warning(f"⚠️ Gagal mengakses {url}: {e}")
-        return []
+        except Exception:
+            continue
 
-lpse_links = get_lpse_links()
+    return tender_data
 
-if not lpse_links:
-    st.error("❌ File 'daftar_lpse.txt' tidak ditemukan atau kosong.")
+lpse_urls = load_lpse_list()
+
+all_tenders = []
+progress = st.progress(0, text="Scraping LPSE...")
+
+for idx, lpse_url in enumerate(lpse_urls):
+    tenders = scrap_lpse(lpse_url)
+    all_tenders.extend(tenders)
+    progress.progress((idx + 1) / len(lpse_urls), text=f"Memproses {idx + 1} dari {len(lpse_urls)} LPSE")
+
+progress.empty()
+
+if all_tenders:
+    df = pd.DataFrame(all_tenders)
+    df_sorted = df.sort_values(by="HPS", key=lambda col: col.map(parse_rupiah_to_int), ascending=False)
+    st.success(f"Menampilkan {len(df_sorted)} tender dengan HPS ≥ Rp 200.000.000")
+    st.dataframe(df_sorted.reset_index(drop=True))
 else:
-    all_data = []
-    for link in lpse_links:
-        data = scrap_lpse(link)
-        all_data.extend(data)
-
-    if not all_data:
-        st.info("🔍 Tidak ditemukan tender dengan HPS ≥ 200 juta.")
-    else:
-        df = pd.DataFrame(all_data)
-        df = df.sort_values(by="HPS", ascending=False).reset_index(drop=True)
-        df["HPS"] = df["HPS"].apply(lambda x: f"Rp {x:,.0f}".replace(",", "."))
-        st.dataframe(df, use_container_width=True)
+    st.warning("Tidak ada data tender yang memenuhi syarat atau semua koneksi gagal.")
