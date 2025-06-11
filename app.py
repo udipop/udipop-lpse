@@ -67,7 +67,6 @@ if all_data:
     df = pd.DataFrame(all_data)
     st.success(f"Ditemukan {len(df)} data tender aktif dengan HPS > 200 juta!")
     st.dataframe(df)
-    csv = df.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Download CSV", csv, "tender_lpse.csv", "text/csv")
+
 else:
     st.warning("Tidak ada data tender yang ditemukan.")
