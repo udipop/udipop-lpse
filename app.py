@@ -13,12 +13,6 @@ def read_lpse_list(file_path):
     with open(file_path, "r") as file:
         return [line.strip() for line in file if line.strip()]
 
-def parse_hps(hps_str):
-    try:
-        return int(hps_str.replace("Rp", "").replace(".00", "").replace(" ", "").replace(".", "").replace(",", ""))
-    except:
-        return 0
-
 def scrape_lpse(url):
     base_url = url.rstrip("/")
     target_url = urljoin(base_url, "/eproc4")
@@ -33,13 +27,10 @@ def scrape_lpse(url):
 
         rows = table.find_all("tr")
         data = []
-        current_kategori = None
 
         for row in rows:
             cols = row.find_all("td")
-            if len(cols) == 1 and "toggle" in row.text:
-                current_kategori = row.text.strip()
-            elif len(cols) == 4 and "href" in str(row):
+            if len(cols) == 4 and "href" in str(row):
                 nama_paket_tag = cols[1].find("a")
                 nama_paket = nama_paket_tag.text.strip() if nama_paket_tag else ""
                 link = urljoin(base_url, nama_paket_tag["href"]) if nama_paket_tag else ""
@@ -47,7 +38,6 @@ def scrape_lpse(url):
                 akhir = cols[3].text.strip()
                 data.append({
                     "LPSE": base_url,
-                    "Kategori": current_kategori,
                     "Nama Paket": nama_paket,
                     "HPS": hps,
                     "Akhir Pendaftaran": akhir,
