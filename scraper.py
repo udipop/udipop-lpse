@@ -1,5 +1,16 @@
+# requirements.txt
+# -----------------
+# streamlit
+# beautifulsoup4
+# lxml
+# requests
+# pandas
+
+# scraper_streamlit.py
+import streamlit as st
 import requests
 from bs4 import BeautifulSoup
+import pandas as pd
 import re
 
 def parse_hps(hps_str):
@@ -17,34 +28,58 @@ def scrape_lpse(url):
         return []
 
     soup = BeautifulSoup(res.text, "lxml")
-    rows = soup.select("tr.Pekerjaan_Konstruksi")
+    rows = soup.select("table.table.table-sm tbody tr")
 
     data = []
+    current_category = None
     for row in rows:
         cols = row.find_all("td")
-        if len(cols) < 4:
-            continue
-        nama_paket = cols[1].get_text(strip=True)
-        hps_str = cols[2].get_text(strip=True)
-        akhir_pendaftaran = cols[3].get_text(strip=True)
 
-        hps_value = parse_hps(hps_str)
-        if hps_value >= 200_000_000:
-            link_tag = cols[1].find("a")
-            link = url + link_tag["href"] if link_tag else ""
-            data.append({
-                "LPSE": url,
-                "Nama Paket": nama_paket,
-                "HPS": hps_value,
-                "Akhir Pendaftaran": akhir_pendaftaran,
-                "Link": link
-            })
+        # Baris kategori (colspan=4)
+        if len(cols) == 1 or (len(cols) == 4 and not cols[1].find("a")):
+            current_category = BeautifulSoup(str(row), "lxml").get_text(strip=True)
+            continue
+
+        # Baris data tender (4 kolom)
+        if len(cols) == 4:
+            nama_paket_tag = cols[1].find("a")
+            nama_paket = nama_paket_tag.get_text(strip=True) if nama_paket_tag else cols[1].get_text(strip=True)
+            hps_str = cols[2].get_text(strip=True)
+            akhir_pendaftaran = cols[3].get_text(strip=True)
+            hps_value = parse_hps(hps_str)
+
+            if hps_value >= 200_000_000:
+                link = url + nama_paket_tag['href'] if nama_paket_tag else ""
+                data.append({
+                    "Kategori": current_category,
+                    "LPSE": url,
+                    "Nama Paket": nama_paket,
+                    "HPS": hps_value,
+                    "Akhir Pendaftaran": akhir_pendaftaran,
+                    "Link": link
+                })
     return data
 
-def scrape_all_lpse(lpse_list_file="daftar_lpse.txt"):
-    with open(lpse_list_file) as f:
-        urls = [line.strip() for line in f if line.strip()]
+def scrape_all_lpse(file_path="daftar_lpse.txt"):
+    try:
+        with open(file_path) as f:
+            urls = [line.strip() for line in f if line.strip()]
+    except FileNotFoundError:
+        return []
+
     all_data = []
     for url in urls:
         all_data.extend(scrape_lpse(url))
     return all_data
+
+# Streamlit App
+st.title("Daftar Tender LPSE (HPS >= 200 Juta)")
+
+with st.spinner("Mengambil data dari LPSE..."):
+    data = scrape_all_lpse()
+
+if data:
+    df = pd.DataFrame(data)
+    st.dataframe(df, use_container_width=True)
+else:
+    st.warning("Tidak ada data ditemukan atau terjadi kesalahan saat mengambil data.")
