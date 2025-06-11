@@ -4,7 +4,7 @@ from bs4 import BeautifulSoup
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
 
-st.title("📋 Tender Aktif dari Seluruh LPSE SPSE v4.x")
+st.title("📋 Udipop Scraper Tender LPSE Indonesia")
 
 # Fungsi untuk ambil tender dari satu domain
 def ambil_tender(domain):
