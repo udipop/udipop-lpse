@@ -1,64 +1,63 @@
-import streamlit as st
-import pandas as pd
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin
-from concurrent.futures import ThreadPoolExecutor
+import pandas as pd
+import re
 
-st.set_page_config(page_title="Scraper LPSE", layout="wide")
-st.title("🔍 Scraper Tender LPSE SPSE 4.5")
+# Fungsi bantu untuk membersihkan nilai HPS
+def clean_hps(hps_raw):
+    return re.sub(r'\.00$', '', hps_raw.replace(',00', ''))
 
-# Baca daftar LPSE dari file
-def read_lpse_list(file_path):
-    with open(file_path, "r") as file:
-        return [line.strip() for line in file if line.strip()]
-
+# Fungsi scrap 1 halaman LPSE
 def scrape_lpse(url):
-    base_url = url.rstrip("/")
-    target_url = urljoin(base_url, "/eproc4")
+    paket_list = []
+
     try:
-        response = requests.get(target_url, timeout=10, verify=False)
+        response = requests.get(url, timeout=10)
         response.raise_for_status()
-        soup = BeautifulSoup(response.text, "html.parser")
+    except Exception as e:
+        print(f"Gagal akses {url}: {e}")
+        return paket_list
 
-        table = soup.find("table")
-        if not table:
-            return []
+    soup = BeautifulSoup(response.text, 'html.parser')
 
-        rows = table.find_all("tr")
-        data = []
+    # Cari semua div atau tr yang berisi paket
+    rows = soup.find_all("div", class_="daftar-paket") or soup.find_all("tr")
 
-        for row in rows:
-            cols = row.find_all("td")
-            if len(cols) == 4 and "href" in str(row):
-                nama_paket_tag = cols[1].find("a")
-                nama_paket = nama_paket_tag.text.strip() if nama_paket_tag else ""
-                link = urljoin(base_url, nama_paket_tag["href"]) if nama_paket_tag else ""
-                hps = cols[2].text.strip()
-                akhir = cols[3].text.strip()
-                data.append({
-                    "LPSE": base_url,
-                    "Nama Paket": nama_paket,
-                    "HPS": hps,
-                    "Akhir Pendaftaran": akhir,
-                    "Link": link,
-                })
-        return data
-    except Exception:
-        return []
+    for row in rows:
+        try:
+            nama_paket = row.find("a").get_text(strip=True)
 
-lpse_list = read_lpse_list("daftar_lpse.txt")
-st.write(f"Total LPSE ditemukan: {len(lpse_list)}")
+            hps_tag = row.find(string=re.compile("HPS")).parent
+            hps_raw = hps_tag.get_text(strip=True)
+            hps_clean = clean_hps(re.search(r"Rp\s?[\d\.,]+", hps_raw).group())
 
+            akhir_tag = row.find(string=re.compile("Akhir Pendaftaran"))
+            akhir_pendaftaran = akhir_tag.find_next().get_text(strip=True)
+
+            paket_list.append({
+                "Nama Paket": nama_paket,
+                "HPS": hps_clean,
+                "Akhir Pendaftaran": akhir_pendaftaran
+            })
+        except Exception:
+            continue
+
+    return paket_list
+
+# Baca semua link dari file
+with open("daftar_lpse.txt", "r") as file:
+    urls = [line.strip() for line in file if line.strip()]
+
+# Gabungkan semua data
 all_data = []
-with ThreadPoolExecutor(max_workers=10) as executor:
-    results = executor.map(scrape_lpse, lpse_list)
-    for result in results:
-        if result:
-            all_data.extend(result)
+for url in urls:
+    print(f"Scraping: {url}")
+    data = scrape_lpse(url)
+    all_data.extend(data)
 
-if all_data:
-    df = pd.DataFrame(all_data)
-    st.dataframe(df)
-else:
-    st.warning("Tidak ada data berhasil diambil dari LPSE yang tersedia.")
+# Tampilkan hasil dalam DataFrame
+df = pd.DataFrame(all_data)
+print(df)
+
+# Simpan sebagai CSV jika diinginkan
+df.to_csv("hasil_scrape_lpse.csv", index=False)
