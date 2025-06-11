@@ -2,71 +2,54 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
-from concurrent.futures import ThreadPoolExecutor
-import re
 
 st.title("📋 Udipop Scraper Tender LPSE Indonesia")
 
-# Fungsi bantu untuk konversi nilai HPS ke float
-def parse_hps(hps_text):
+def get_tender_data(lpse_url):
     try:
-        angka = re.sub(r'[^\d]', '', hps_text)
-        return float(angka)
-    except:
-        return 0.0
+        response = requests.get(f"{lpse_url}/eproc4", timeout=10)
+        soup = BeautifulSoup(response.text, 'html.parser')
 
-# Fungsi untuk ambil tender dari satu domain
-def ambil_tender(domain):
-    url = f"{domain}/"
-    try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, "html.parser")
-        table = soup.find("table")
-        if not table:
-            return []
+        rows = soup.select("div.card.card-primary table tbody tr")
+        data = []
 
-        rows = table.find_all("tr")[1:]  # Skip header
-        hasil = []
         for row in rows:
-            cols = row.find_all("td")
-            if len(cols) >= 5:
-                hps_text = cols[3].text.strip()
-                hps_value = parse_hps(hps_text)
-                if hps_value >= 200_000_000:
-                    hasil.append({
-                        "LPSE": domain.replace("https://", ""),
-                        "Nama Paket": cols[1].text.strip(),
-                        "HPS": hps_text,
-                        "Akhir Pendaftaran": cols[4].text.strip()
-                    })
-        return hasil
+            cols = row.find_all('td')
+            if len(cols) < 4:
+                continue
+            link_tag = cols[1].find('a')
+            nama_paket = link_tag.text.strip() if link_tag else cols[1].text.strip()
+            link = lpse_url + link_tag.get("href") if link_tag else lpse_url
+            hps = cols[2].text.strip()
+            akhir_pendaftaran = cols[3].text.strip()
+            data.append({
+                "Nama Paket": nama_paket,
+                "HPS": hps,
+                "Akhir Pendaftaran": akhir_pendaftaran,
+                "Sumber": link
+            })
+        return data
     except Exception as e:
-        return [{
-            "LPSE": domain.replace("https://", ""),
-            "Nama Paket": f"Gagal ambil data: {e}",
-            "HPS": "-",
-            "Akhir Pendaftaran": "-"
-        }]
+        return []
 
-# Baca daftar domain
-with open("daftar_lpse.txt", "r") as f:
-    list_domain = [line.strip() for line in f.readlines() if line.strip()]
+def main():
+    st.title("Scraper Tender LPSE Seluruh Indonesia")
 
-st.write(f"📡 Mengambil tender aktif dari {len(list_domain)} domain LPSE...")
+    with open("daftar_lpse.txt", "r") as f:
+        lpse_links = [line.strip() for line in f.readlines() if line.strip()]
 
-# Proses paralel agar cepat
-all_data = []
-with ThreadPoolExecutor(max_workers=10) as executor:
-    results = executor.map(ambil_tender, list_domain)
-    for result in results:
-        all_data.extend(result)
+    selected_lpse = st.selectbox("Pilih LPSE", lpse_links)
+    st.write(f"Menampilkan data dari: {selected_lpse}")
 
-# Tampilkan data jika ada
-if all_data:
-    df = pd.DataFrame(all_data)
-    st.success(f"Ditemukan {len(df)} data tender aktif dengan HPS > 200 juta!")
-    st.dataframe(df)
+    with st.spinner("Mengambil data..."):
+        result = get_tender_data(selected_lpse)
 
-else:
-    st.warning("Tidak ada data tender yang ditemukan.")
+    if result:
+        df = pd.DataFrame(result)
+        df["Sumber"] = df["Sumber"].apply(lambda x: f"[Lihat]({x})")
+        st.write(df.to_markdown(index=False), unsafe_allow_html=True)
+    else:
+        st.warning("Tidak ada data ditemukan atau terjadi kesalahan.")
+
+if __name__ == "__main__":
+    main()
