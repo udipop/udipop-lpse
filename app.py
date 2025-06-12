@@ -1,44 +1,92 @@
+import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
-import streamlit as st
 
-# Fungsi untuk mengambil daftar LPSE dari file GitHub
-def get_lpse_list(url):
-    response = requests.get(url)
-    lpse_sites = response.text.strip().split("\n")
-    return lpse_sites
+# URL GitHub langsung ke raw daftar LPSE
+LPSE_LIST_URL = "https://raw.githubusercontent.com/udipop/udipop-lpse/main/daftar_lpse.txt"
 
-# Fungsi untuk melakukan scraping dari satu situs LPSE
-def scrape_lpse_tender(lpse_url):
-    page = requests.get(lpse_url)
-    soup = BeautifulSoup(page.content, "html.parser")
-    
+# Fungsi ambil daftar LPSE
+@st.cache_data
+def get_lpse_list():
+    response = requests.get(LPSE_LIST_URL)
+    response.raise_for_status()
+    return [line.strip() for line in response.text.splitlines() if line.strip()]
+
+# Fungsi konversi HPS ke nilai numerik
+def parse_hps(hps_text):
+    try:
+        hps_text = hps_text.replace(".", "").replace(",", ".")
+        angka = ''.join(c for c in hps_text if c.isdigit() or c in ",.")
+        return float(angka)
+    except:
+        return 0.0
+
+# Fungsi scrap dari 1 situs LPSE
+def scrape_lpse(lpse_url):
+    base_url = f"https://{lpse_url}"
+    tender_url = f"{base_url}/eproc4/lelang"
     tenders = []
-    
-    for tender in soup.find_all("div", class_="tender-item"):
-        nama_paket = tender.find("h3").text.strip()
-        hps = tender.find("span", class_="hps").text.strip()
-        akhir_pendaftaran = tender.find("span", class_="deadline").text.strip()
-        link_sumber = tender.find("a", class_="source-link")["href"]
-        
-        tenders.append([nama_paket, hps, akhir_pendaftaran, lpse_url + link_sumber])
+
+    try:
+        res = requests.get(tender_url, timeout=10)
+        soup = BeautifulSoup(res.content, "html.parser")
+        rows = soup.select("table.table tbody tr")
+
+        for row in rows:
+            cols = row.find_all("td")
+            if len(cols) < 5:
+                continue
+
+            nama_paket = cols[1].get_text(strip=True)
+            link_detail = cols[1].find("a")["href"]
+            hps = cols[3].get_text(strip=True)
+            akhir_pendaftaran = cols[4].get_text(strip=True)
+
+            hps_value = parse_hps(hps)
+            if hps_value >= 200_000_000:
+                tenders.append({
+                    "Nama Paket": nama_paket,
+                    "HPS": f"Rp {hps}",
+                    "Akhir Pendaftaran": akhir_pendaftaran,
+                    "Link Sumber": f"{base_url}{link_detail}",
+                    "Situs LPSE": lpse_url
+                })
+    except Exception as e:
+        st.warning(f"Gagal mengakses {lpse_url}: {e}")
 
     return tenders
 
-# URL file daftar LPSE
-github_url = "https://raw.githubusercontent.com/udipop/udipop-lpse/main/daftar_lpse.txt"
-lpse_sites = get_lpse_list(github_url)
+# Judul Aplikasi
+st.title("📦 Scraper Tender LPSE Nasional")
+st.markdown("Menampilkan tender aktif dengan HPS ≥ Rp 200 juta dari berbagai situs LPSE.")
 
-# Mengumpulkan data dari semua LPSE
+lpse_list = get_lpse_list()
+
 all_tenders = []
-for lpse in lpse_sites:
-    all_tenders.extend(scrape_lpse_tender(lpse))
+progress = st.progress(0)
+status = st.empty()
 
-# Simpan ke CSV
-df = pd.DataFrame(all_tenders, columns=["Nama Paket", "HPS", "Akhir Pendaftaran", "Link Sumber"])
-df.to_csv("data_lpse.csv", index=False)
+for idx, lpse in enumerate(lpse_list):
+    status.text(f"Memproses: {lpse} ({idx+1}/{len(lpse_list)})")
+    all_tenders.extend(scrape_lpse(lpse))
+    progress.progress((idx + 1) / len(lpse_list))
 
-# Aplikasi Streamlit untuk menampilkan data
-st.title("Data Tender LPSE")
-st.dataframe(df)
+progress.empty()
+status.empty()
+
+# Tampilkan hasil
+if all_tenders:
+    df = pd.DataFrame(all_tenders)
+
+    # Tambah link klikable
+    df["Link"] = df["Link Sumber"].apply(lambda url: f'<a href="{url}" target="_blank">🔗 Lihat</a>')
+    df_display = df[["Nama Paket", "HPS", "Akhir Pendaftaran", "Link"]].to_html(escape=False, index=False)
+
+    st.markdown("### 📋 Hasil Tender")
+    st.markdown(df_display, unsafe_allow_html=True)
+else:
+    st.info("Tidak ada tender aktif dengan HPS ≥ Rp 200 juta yang ditemukan.")
+
+st.markdown("---")
+st.caption("Data real-time dari LPSE nasional. Dibuat oleh [@udipop](https://github.com/udipop)")
