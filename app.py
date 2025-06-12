@@ -3,90 +3,54 @@ import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 
-# URL GitHub langsung ke raw daftar LPSE
-LPSE_LIST_URL = "https://raw.githubusercontent.com/udipop/udipop-lpse/main/daftar_lpse.txt"
+st.title("📦 Tender Aktif di LPSE PUPR")
+st.markdown("Menampilkan data tender aktif dari beranda utama [lpse.pu.go.id](https://lpse.pu.go.id/) dengan HPS ≥ Rp 200 juta.")
 
-# Fungsi ambil daftar LPSE
+URL = "https://lpse.pu.go.id/"
+
 @st.cache_data
-def get_lpse_list():
-    response = requests.get(LPSE_LIST_URL)
-    response.raise_for_status()
-    return [line.strip() for line in response.text.splitlines() if line.strip()]
+def scrape_from_homepage():
+    res = requests.get(URL)
+    soup = BeautifulSoup(res.content, "html.parser")
+    data = []
 
-# Fungsi konversi HPS ke nilai numerik
-def parse_hps(hps_text):
-    try:
-        hps_text = hps_text.replace(".", "").replace(",", ".")
-        angka = ''.join(c for c in hps_text if c.isdigit() or c in ",.")
-        return float(angka)
-    except:
-        return 0.0
+    for row in soup.select("tr[class]"):
+        cols = row.find_all("td")
+        if len(cols) != 4:
+            continue
 
-# Fungsi scrap dari 1 situs LPSE
-def scrape_lpse(lpse_url):
-    base_url = f"https://{lpse_url}"
-    tender_url = f"{base_url}/eproc4/lelang"
-    tenders = []
+        link_tag = cols[1].find("a")
+        if not link_tag:
+            continue
 
-    try:
-        res = requests.get(tender_url, timeout=10)
-        soup = BeautifulSoup(res.content, "html.parser")
-        rows = soup.select("table.table tbody tr")
+        nama = link_tag.text.strip()
+        hps = cols[2].text.strip()
+        akhir = cols[3].text.strip()
 
-        for row in rows:
-            cols = row.find_all("td")
-            if len(cols) < 5:
-                continue
+        # parsing angka
+        hps_val = hps.replace("Rp.", "").replace(".", "").replace(",", ".").strip()
+        try:
+            hps_float = float(hps_val)
+        except:
+            hps_float = 0
 
-            nama_paket = cols[1].get_text(strip=True)
-            link_detail = cols[1].find("a")["href"]
-            hps = cols[3].get_text(strip=True)
-            akhir_pendaftaran = cols[4].get_text(strip=True)
+        if hps_float >= 200_000_000:
+            data.append({
+                "Nama Paket": nama,
+                "HPS": hps,
+                "Akhir Pendaftaran": akhir,
+                "Link Sumber": URL  # selalu arahkan ke beranda
+            })
 
-            hps_value = parse_hps(hps)
-            if hps_value >= 200_000_000:
-                tenders.append({
-                    "Nama Paket": nama_paket,
-                    "HPS": f"Rp {hps}",
-                    "Akhir Pendaftaran": akhir_pendaftaran,
-                    "Link Sumber": f"{base_url}{link_detail}",
-                    "Situs LPSE": lpse_url
-                })
-    except Exception as e:
-        st.warning(f"Gagal mengakses {lpse_url}: {e}")
+    return pd.DataFrame(data)
 
-    return tenders
+df = scrape_from_homepage()
 
-# Judul Aplikasi
-st.title("📦 Scraper Tender LPSE Nasional")
-st.markdown("Menampilkan tender aktif dengan HPS ≥ Rp 200 juta dari berbagai situs LPSE.")
-
-lpse_list = get_lpse_list()
-
-all_tenders = []
-progress = st.progress(0)
-status = st.empty()
-
-for idx, lpse in enumerate(lpse_list):
-    status.text(f"Memproses: {lpse} ({idx+1}/{len(lpse_list)})")
-    all_tenders.extend(scrape_lpse(lpse))
-    progress.progress((idx + 1) / len(lpse_list))
-
-progress.empty()
-status.empty()
-
-# Tampilkan hasil
-if all_tenders:
-    df = pd.DataFrame(all_tenders)
-
-    # Tambah link klikable
-    df["Link"] = df["Link Sumber"].apply(lambda url: f'<a href="{url}" target="_blank">🔗 Lihat</a>')
-    df_display = df[["Nama Paket", "HPS", "Akhir Pendaftaran", "Link"]].to_html(escape=False, index=False)
-
-    st.markdown("### 📋 Hasil Tender")
-    st.markdown(df_display, unsafe_allow_html=True)
+if df.empty:
+    st.info("Tidak ada data tender aktif dengan HPS ≥ Rp 200 juta.")
 else:
-    st.info("Tidak ada tender aktif dengan HPS ≥ Rp 200 juta yang ditemukan.")
+    df["Link"] = df["Link Sumber"].apply(lambda u: f'<a href="{u}" target="_blank">🔗 Lihat</a>')
+    st.markdown(df[["Nama Paket", "HPS", "Akhir Pendaftaran", "Link"]].to_html(escape=False, index=False), unsafe_allow_html=True)
 
 st.markdown("---")
-st.caption("Data real-time dari LPSE nasional. Dibuat oleh [@udipop](https://github.com/udipop)")
+st.caption("Sumber: lpse.pu.go.id — scraper oleh @udipop")
