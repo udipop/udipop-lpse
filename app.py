@@ -1,63 +1,44 @@
-import streamlit as st
-import pandas as pd
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin
-from concurrent.futures import ThreadPoolExecutor
+import pandas as pd
+import streamlit as st
 
-st.set_page_config(page_title="Scraper LPSE", layout="wide")
-st.title("🔍 Scraper Tender LPSE SPSE 4.5")
+# Fungsi untuk mengambil daftar LPSE dari file GitHub
+def get_lpse_list(url):
+    response = requests.get(url)
+    lpse_sites = response.text.strip().split("\n")
+    return lpse_sites
 
-# Baca daftar LPSE dari file
-def read_lpse_list(file_path):
-    with open(file_path, "r") as file:
-        return [line.strip() for line in file if line.strip()]
+# Fungsi untuk melakukan scraping dari satu situs LPSE
+def scrape_lpse_tender(lpse_url):
+    page = requests.get(lpse_url)
+    soup = BeautifulSoup(page.content, "html.parser")
+    
+    tenders = []
+    
+    for tender in soup.find_all("div", class_="tender-item"):
+        nama_paket = tender.find("h3").text.strip()
+        hps = tender.find("span", class_="hps").text.strip()
+        akhir_pendaftaran = tender.find("span", class_="deadline").text.strip()
+        link_sumber = tender.find("a", class_="source-link")["href"]
+        
+        tenders.append([nama_paket, hps, akhir_pendaftaran, lpse_url + link_sumber])
 
-def scrape_lpse(url):
-    base_url = url.rstrip("/")
-    target_url = urljoin(base_url, "/eproc4")
-    try:
-        response = requests.get(target_url, timeout=10, verify=False)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, "html.parser")
+    return tenders
 
-        table = soup.find("table")
-        if not table:
-            return []
+# URL file daftar LPSE
+github_url = "https://raw.githubusercontent.com/udipop/udipop-lpse/main/daftar_lpse.txt"
+lpse_sites = get_lpse_list(github_url)
 
-        rows = table.find_all("tr")
-        data = []
+# Mengumpulkan data dari semua LPSE
+all_tenders = []
+for lpse in lpse_sites:
+    all_tenders.extend(scrape_lpse_tender(lpse))
 
-        for row in rows:
-            cols = row.find_all("td")
-            if len(cols) == 4 and "href" in str(row):
-                nama_paket_tag = cols[1].find("a")
-                nama_paket = nama_paket_tag.text.strip() if nama_paket_tag else ""
-                link = urljoin(base_url, nama_paket_tag["href"]) if nama_paket_tag else ""
-                hps = cols[2].text.strip()
-                akhir = cols[3].text.strip()
-                data.append({
-                    "LPSE": base_url,
-                    "Nama Paket": nama_paket,
-                    "HPS": hps,
-                    "Akhir Pendaftaran": akhir,
-                })
-        return data
-    except Exception:
-        return []
+# Simpan ke CSV
+df = pd.DataFrame(all_tenders, columns=["Nama Paket", "HPS", "Akhir Pendaftaran", "Link Sumber"])
+df.to_csv("data_lpse.csv", index=False)
 
-lpse_list = read_lpse_list("daftar_lpse.txt")
-st.write(f"Total LPSE ditemukan: {len(lpse_list)}")
-
-all_data = []
-with ThreadPoolExecutor(max_workers=10) as executor:
-    results = executor.map(scrape_lpse, lpse_list)
-    for result in results:
-        if result:
-            all_data.extend(result)
-
-if all_data:
-    df = pd.DataFrame(all_data)
-    st.dataframe(df)
-else:
-    st.warning("Tidak ada data berhasil diambil dari LPSE yang tersedia.")
+# Aplikasi Streamlit untuk menampilkan data
+st.title("Data Tender LPSE")
+st.dataframe(df)
